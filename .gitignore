@@ -1,0 +1,27 @@
+# Python/runtime
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Streamlit/runtime state
+.streamlit_uploads/
+order_sequences.json
+
+# Generated documents and test output
+outputs/
+outputs_test/
+*.log
+
+# Temporary extraction/build artifacts
+tmp_*/
+tmp_pdf_text.txt
+
+# Customer/order source files should be selected locally, not stored in git
+POUT*.pdf
+*码单*.png
+
+# Unrelated local experiments
+ios/
+handoff/
