@@ -296,6 +296,7 @@ def _empty_analysis(session_id: str) -> dict[str, Any]:
         "session_id": session_id,
         "files": _file_status({}, []),
         "order_image_rows": [],
+        "order_image_errors": [],
         "invoice_input": [],
         "roll_input": [],
         "order": {},
@@ -436,7 +437,8 @@ def _parse_order_cells(cells: list[str], source_file: str) -> dict[str, Any] | N
     color_code_index = next((index for index, cell in enumerate(cells) if re.search(r"COLOR\s*:?\s*\d", cell, flags=re.I)), -1)
     color_code_cell = cells[color_code_index] if color_code_index >= 0 else ""
     color_code = _extract_color_code(color_code_cell)
-    if not color_name or not color_code:
+    company_color_code = _format_company_color_code(color_code)
+    if not color_name or not company_color_code:
         return None
     quantity_cell = _quantity_cell(cells, color_code_index)
     quantity = _first_float(quantity_cell)
@@ -449,8 +451,8 @@ def _parse_order_cells(cells: list[str], source_file: str) -> dict[str, Any] | N
         "source_file": source_file,
         "style": style,
         "color_name": color_name,
-        "company_color_code": color_code,
-        "display_color": f"{color_name} #{color_code}",
+        "company_color_code": company_color_code,
+        "display_color": _company_color_label(color_name, company_color_code),
         "quantity": quantity,
         "quantity_text": quantity_cell,
         "unit": unit,
@@ -476,7 +478,7 @@ def _invoice_rows_from_order_images(rows: list[dict[str, Any]], fabric: FabricRe
         invoice_rows.append(
             [
                 row.get("display_color") or row.get("color_name") or "",
-                f"{row.get('color_name', '').strip()} - {row.get('company_color_code', '').strip()}".strip(" -"),
+                _company_art_no(row.get("color_name", ""), row.get("company_color_code", "")),
                 None,
                 row.get("quantity"),
                 unit,
@@ -523,6 +525,26 @@ def _clean_cell(value: object) -> str:
 def _extract_color_code(value: str) -> str:
     match = re.search(r"COLOR\s*:?\s*([0-9]+(?:\s*[+]\s*[0-9]+)*)", value, flags=re.I)
     return re.sub(r"\s+", "", match.group(1)) if match else ""
+
+
+def _format_company_color_code(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    cleaned = text.strip("#").strip()
+    return f"{cleaned}#" if cleaned else ""
+
+
+def _company_color_label(color_name: object, company_color_code: object) -> str:
+    name = str(color_name or "").strip()
+    code = _format_company_color_code(company_color_code)
+    return " ".join(part for part in [name, code] if part)
+
+
+def _company_art_no(color_name: object, company_color_code: object) -> str:
+    name = str(color_name or "").strip()
+    code = _format_company_color_code(company_color_code)
+    return " - ".join(part for part in [name, code] if part)
 
 
 def _quantity_cell(cells: list[str], color_code_index: int = -1) -> str:
