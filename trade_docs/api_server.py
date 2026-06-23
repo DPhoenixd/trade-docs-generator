@@ -7,8 +7,10 @@ from typing import Annotated
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from .api_service import analyze_files, download_path, generate_documents, generate_invoice_document, search_fabrics
+from .paths import frontend_dist_dir
 
 
 app = FastAPI(title="P.I/P.L一点腾 API")
@@ -79,3 +81,8 @@ def download(session_id: str, kind: str) -> FileResponse:
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return FileResponse(path, filename=path.name)
+
+
+frontend_dir = frontend_dist_dir()
+if frontend_dir.exists():
+    app.mount("/", StaticFiles(directory=frontend_dir, html=True), name="frontend")

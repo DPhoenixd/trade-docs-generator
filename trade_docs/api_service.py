@@ -24,12 +24,14 @@ from .excel_writer import write_packing_list, write_proforma_invoice
 from .fabric_db import fabric_record_from_row, find_fabric, load_fabric_master
 from .models import FabricRecord, OrderInfo
 from .numbering import suggest_doc_number
+from .paths import app_data_dir, default_fabric_database, project_root
 
 
-BASE_DIR = Path(__file__).resolve().parents[1]
-RUNTIME_DIR = BASE_DIR / ".pipl_runtime"
+BASE_DIR = project_root()
+DATA_DIR = app_data_dir()
+RUNTIME_DIR = DATA_DIR / ".pipl_runtime"
 SESSION_DIR = RUNTIME_DIR / "sessions"
-OUTPUT_DIR = BASE_DIR / "outputs"
+OUTPUT_DIR = DATA_DIR / "outputs"
 
 DEFAULT_PI_TEMPLATE = Path(
     "D:/DyrusWok/外贸/COTTEX&TESSELATION/#6529/POUT26VE0002814A -6529/6.08-P.I- P.L/6.08 P.I-POUT26VE0002814A -6529.xlsx"
@@ -37,7 +39,7 @@ DEFAULT_PI_TEMPLATE = Path(
 DEFAULT_PL_TEMPLATE = Path(
     "D:/DyrusWok/外贸/COTTEX&TESSELATION/#6529/POUT26VE0002814A -6529/6.08-P.I- P.L/6.08Packing List-POUT26VE0002814A-6529-20260608.xlsx"
 )
-DEFAULT_FABRIC_DB = Path("D:/codex application/合同自动生成工具/0428 fabric_prices.xlsx")
+DEFAULT_FABRIC_DB = default_fabric_database()
 
 
 def analyze_files(saved_files: list[Path] | None = None) -> dict[str, Any]:
