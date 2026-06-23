@@ -55,6 +55,10 @@ class OrderInfo:
     output_dir: Path = Path("outputs")
     note: str = ""
     buyer_address: str = ""
+    payment_terms: str = ""
+    delivery_time: str = ""
+    port_destination: str = ""
+    port_loading: str = "GUANGZHOU,CHINA"
 
 
 @dataclass(frozen=True)

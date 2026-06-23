@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -58,7 +59,11 @@ def load_fabric_master(path: str | Path) -> pd.DataFrame:
     elif path.suffix.lower() == ".csv":
         df = pd.read_csv(path, dtype=str, encoding="utf-8-sig")
     elif path.suffix.lower() in {".xlsx", ".xlsm"}:
-        df = pd.read_excel(path, sheet_name="fabric_master_en", dtype=str)
+        try:
+            df = pd.read_excel(path, sheet_name="fabric_master_en", dtype=str)
+        except ValueError:
+            df = pd.read_excel(path, sheet_name=0, dtype=str)
+            df = _normalise_chinese_price_sheet(df)
     else:
         raise ValueError(f"Unsupported fabric database format: {path.suffix}")
 
@@ -82,8 +87,151 @@ def load_price_rules(path: str | Path | None) -> pd.DataFrame:
     if path.suffix.lower() == ".csv":
         return pd.read_csv(path, dtype=str, encoding="utf-8-sig")
     if path.suffix.lower() in {".xlsx", ".xlsm"}:
-        return pd.read_excel(path, sheet_name="fabric_price_rules", dtype=str)
+        try:
+            return pd.read_excel(path, sheet_name="fabric_price_rules", dtype=str)
+        except ValueError:
+            df = pd.read_excel(path, sheet_name=0, dtype=str)
+            return _normalise_chinese_price_rules(df)
     return pd.DataFrame()
+
+
+def _normalise_chinese_price_sheet(df: pd.DataFrame) -> pd.DataFrame:
+    df = _clean_chinese_columns(df)
+    required = {"面料编号", "品质等级", "成分", "幅宽", "克重"}
+    if not required.issubset(set(df.columns)):
+        raise ValueError("Excel 面料数据库需要 fabric_master_en 工作表，或包含中文价格库表头：面料编号/品质等级/成分/幅宽/克重")
+
+    rows: list[dict[str, object]] = []
+    for _, row in df.iterrows():
+        code = _clean_text(row.get("面料编号", ""))
+        if not code:
+            continue
+        grade_cn = _clean_text(row.get("品质等级", ""))
+        quantification = _first_number(row.get("量化", ""))
+        tube_allowance = _sum_numbers(row.get("纸筒+空差", ""))
+        reference_roll = _first_number(row.get("参考条重", ""))
+        rows.append(
+            {
+                "fabric_code": code,
+                "quality_grade_cn": grade_cn,
+                "quality_grade_en": _grade_cn_to_en(grade_cn),
+                "fabric_name_cn": _clean_text(row.get("面料名称", "")),
+                "fabric_name_en": "",
+                "composition_cn": _clean_text(row.get("成分", "")),
+                "composition_en": _composition_cn_to_en(row.get("成分", "")),
+                "width_cn": _clean_text(row.get("幅宽", "")),
+                "width_en": _width_to_en(row.get("幅宽", "")),
+                "weight_cn": _clean_text(row.get("克重", "")),
+                "weight_en": _weight_to_en(row.get("克重", "")),
+                "quantification_m_per_kg": _float_text(quantification),
+                "tube_plus_allowance_kg_per_roll": _float_text(tube_allowance),
+                "reference_roll_weight_kg": _float_text(reference_roll),
+                "reference_roll_weight": _clean_text(row.get("参考条重", "")),
+                "remarks_cn": _clean_text(row.get("特殊标注", "")),
+                "remarks_en": _clean_text(row.get("特殊标注", "")),
+                "source_series_cn": _clean_text(row.get("系列来源", "")),
+                "color_rule_cn": _clean_text(row.get("色号", "")),
+                "price_adjustment_cn": _clean_text(row.get("价格调整", "")),
+                "bulk_price_rmb_per_kg": _first_number_text(row.get("大货价", "")),
+                "net_price_rmb_per_kg": _first_number_text(row.get("净布价", "")),
+                "net_price_rmb_per_meter": _first_number_text(row.get("净布米价", "")),
+                "sample_price_rmb_per_meter": _first_number_text(row.get("散剪价", "")),
+                "default_bulk_price_rmb_per_kg": _first_number_text(row.get("默认大货价", "")),
+                "default_net_price_rmb_per_kg": _first_number_text(row.get("默认净布KG价", "")),
+                "default_net_price_rmb_per_meter": _first_number_text(row.get("默认参考净布米价", "")),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _normalise_chinese_price_rules(df: pd.DataFrame) -> pd.DataFrame:
+    master = _normalise_chinese_price_sheet(df)
+    keep = [
+        "fabric_code",
+        "quality_grade_cn",
+        "quality_grade_en",
+        "color_rule_cn",
+        "price_adjustment_cn",
+        "bulk_price_rmb_per_kg",
+        "net_price_rmb_per_kg",
+        "net_price_rmb_per_meter",
+        "sample_price_rmb_per_meter",
+        "default_bulk_price_rmb_per_kg",
+        "default_net_price_rmb_per_kg",
+        "default_net_price_rmb_per_meter",
+        "remarks_cn",
+        "remarks_en",
+    ]
+    return master[[column for column in keep if column in master.columns]].copy()
+
+
+def _clean_chinese_columns(df: pd.DataFrame) -> pd.DataFrame:
+    clean = df.copy()
+    clean.columns = [str(column).strip() for column in clean.columns]
+    clean = clean.loc[:, ~clean.columns.str.startswith("Unnamed")]
+    return clean
+
+
+def _grade_cn_to_en(value: object) -> str:
+    text = _clean_text(value)
+    if "一等" in text:
+        return "First Grade"
+    if "合格" in text:
+        return "Qualified Grade"
+    return text
+
+
+def _composition_cn_to_en(value: object) -> str:
+    text = _clean_text(value)
+    replacements = {
+        "粘纤": "Viscose",
+        "粘胶": "Viscose",
+        "棉": "Cotton",
+        "氨纶": "Elastane",
+        "聚酯纤维": "Polyester",
+        "涤纶": "Polyester",
+        "腈纶": "Acrylic",
+        "锦纶": "Nylon",
+        "羊毛": "Wool",
+        "麻": "Linen",
+    }
+    for cn, en in replacements.items():
+        text = text.replace(cn, en)
+    return text
+
+
+def _width_to_en(value: object) -> str:
+    text = _clean_text(value).upper()
+    match = re.search(r"\d+(?:\.\d+)?", text)
+    return f"{match.group(0)}CM" if match else text
+
+
+def _weight_to_en(value: object) -> str:
+    text = _clean_text(value).upper()
+    match = re.search(r"\d+(?:\.\d+)?", text)
+    return f"{match.group(0)}G" if match else text
+
+
+def _first_number(value: object) -> float | None:
+    numbers = _numbers(value)
+    return numbers[0] if numbers else None
+
+
+def _sum_numbers(value: object) -> float | None:
+    numbers = _numbers(value)
+    if not numbers:
+        return None
+    return sum(numbers)
+
+
+def _numbers(value: object) -> list[float]:
+    text = _clean_text(value)
+    return [float(match.group(0)) for match in re.finditer(r"\d+(?:\.\d+)?", text)]
+
+
+def _first_number_text(value: object) -> str:
+    number = _first_number(value)
+    return _float_text(number)
 
 
 def _clean_text(value: object) -> str:

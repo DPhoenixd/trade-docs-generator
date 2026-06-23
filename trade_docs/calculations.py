@@ -305,8 +305,6 @@ def validate_order(
             errors.append(f"第 {row_no} 行 USD/KG 单价不是有效正数")
 
     for _, row in summary_df.iterrows():
-        if int(row["rolls"]) > 28:
-            errors.append(f"{row['color']} / {row['lot']} 有 {int(row['rolls'])} 条，超过模板单组 28 条上限")
         prices = [p for p in str(row.get("usd_prices", "")).split(",") if p.strip()]
         if len(prices) > 1:
             warnings.append(f"{row['color']} / {row['lot']} 同组存在多个 USD/KG 单价，汇总单价按加权平均显示")
@@ -357,9 +355,6 @@ def validate_invoice_order(
         errors.append("C/I NO 不能为空")
     if df.empty:
         errors.append("P.I/C.I 明细为空，请录入至少一个颜色")
-    if len(df) > 4:
-        errors.append("当前 CI/PI 模板最多支持 4 个颜色明细，超过部分请拆单或扩展模板")
-
     missing_quantity_rows: list[int] = []
     missing_price_rows: list[int] = []
     invalid_unit_rows: list[int] = []

@@ -7,6 +7,7 @@ __pycache__/
 
 # Streamlit/runtime state
 .streamlit_uploads/
+.pipl_runtime/
 order_sequences.json
 
 # Generated documents and test output
@@ -17,6 +18,12 @@ outputs_test/
 # Temporary extraction/build artifacts
 tmp_*/
 tmp_pdf_text.txt
+
+# Frontend local artifacts
+pipl-frontend/node_modules/
+pipl-frontend/dist/
+pipl-frontend/qa-*.png
+pipl-frontend/vite*.log
 
 # Customer/order source files should be selected locally, not stored in git
 POUT*.pdf

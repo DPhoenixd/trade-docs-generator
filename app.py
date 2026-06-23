@@ -7,6 +7,7 @@ from ctypes import wintypes
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
@@ -25,7 +26,7 @@ from trade_docs.calculations import (
     validate_order,
 )
 from trade_docs.exchange import fetch_usd_cny
-from trade_docs.excel_writer import write_invoice_pair, write_packing_list
+from trade_docs.excel_writer import write_invoice_pair, write_packing_list, write_proforma_invoice
 from trade_docs.fabric_db import discover_fabric_database, find_fabric, load_fabric_master, load_price_rules, save_fabric_record
 from trade_docs.models import FabricRecord, OrderInfo
 from trade_docs.numbering import suggest_doc_number
@@ -33,10 +34,16 @@ from trade_docs.ppo_parser import PPO_LINE_COLUMNS, empty_ppo_lines, parse_buyer
 
 
 BASE_DIR = Path.cwd()
+BEIJING_TZ = ZoneInfo("Asia/Shanghai")
+DEFAULT_EXTERNAL_FILES = {
+    "pi_template": Path("D:/DyrusWok/外贸/COTTEX&TESSELATION/#6529/POUT26VE0002814A -6529/新建文件夹/6.08 P.I-POUT26VE0002814A -6529.xlsx"),
+    "pl_template": Path("D:/DyrusWok/外贸/COTTEX&TESSELATION/#6529/POUT26VE0002814A -6529/新建文件夹/6.08Packing List-POUT26VE0002814A-6529-20260608.xlsx"),
+    "fabric_db": Path("D:/codex application/合同自动生成工具/0428 fabric_prices.xlsx"),
+}
 
 
 def main() -> None:
-    st.set_page_config(page_title="外贸单据工具", layout="wide", initial_sidebar_state="collapsed")
+    st.set_page_config(page_title="P.I/P.L一点腾", layout="wide", initial_sidebar_state="collapsed")
     _style()
     _init_state()
 
@@ -50,6 +57,10 @@ def main() -> None:
         return
 
     module = st.session_state.module
+    if module == "combo":
+        _combo_workflow(paths, fabric_df, price_rules)
+        return
+
     _module_header(module)
 
     if module == "invoice":
@@ -85,7 +96,7 @@ def main() -> None:
 
 def _init_state() -> None:
     if "pi_no" not in st.session_state:
-        st.session_state.pi_no = suggest_doc_number(today=date.today())
+        st.session_state.pi_no = suggest_doc_number(today=_beijing_today())
     if "ci_no" not in st.session_state:
         st.session_state.ci_no = st.session_state.pi_no
     if "exchange_rate" not in st.session_state:
@@ -119,14 +130,28 @@ def _home(db_path: Path, fabric_df: pd.DataFrame, price_rules: pd.DataFrame) -> 
     st.markdown(
         """
         <div class="hero">
-          <h1>外贸单据工具</h1>
-          <p>先选择要生成的单据。进去后只显示那一种单据需要的内容。</p>
+          <h1>P.I/P.L一点腾</h1>
+          <p>读取 P.I、Packing List 模板和面料价格库，先审明细，再一键生成客户付款与报关要用的 Excel。</p>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    left, right = st.columns(2, gap="large")
+    left, mid, right = st.columns(3, gap="large")
     with left:
+        st.markdown(
+            """
+            <div class="entry-card primary-entry">
+              <h2>一键生成</h2>
+              <p>同一批订单同时生成 Proforma Invoice 和 Packing List。</p>
+              <span>推荐入口</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if st.button("进入 P.I + P.L 一键生成", type="primary", width="stretch"):
+            st.session_state.module = "combo"
+            st.rerun()
+    with mid:
         st.markdown(
             """
             <div class="entry-card">
@@ -168,8 +193,12 @@ def _home(db_path: Path, fabric_df: pd.DataFrame, price_rules: pd.DataFrame) -> 
 
 
 def _module_header(module: str) -> None:
-    title = "P.I / C.I 发票" if module == "invoice" else "Packing List 装箱单"
-    desc = "生成两份 Excel：Proforma Invoice + Commercial Invoice。" if module == "invoice" else "生成一份 Excel：Packing List。"
+    if module == "combo":
+        title = "P.I/P.L一点腾"
+        desc = "生成两份 Excel：Proforma Invoice + Packing List。"
+    else:
+        title = "P.I / C.I 发票" if module == "invoice" else "Packing List 装箱单"
+        desc = "生成两份 Excel：Proforma Invoice + Commercial Invoice。" if module == "invoice" else "生成一份 Excel：Packing List。"
     col1, col2 = st.columns([1, 0.18])
     with col1:
         st.markdown(f"<div class='module-title'><h1>{title}</h1><p>{desc}</p></div>", unsafe_allow_html=True)
@@ -184,11 +213,11 @@ def _source_files() -> dict[str, Path | None]:
     with cols[0]:
         ppo_pdf = _file_select("PPO PDF", [".pdf"], "POUT26VE0011181A.pdf")
     with cols[1]:
-        pl_template = _file_select("Packing List 模板", [".xlsx"], "Packing List-POUT25VE0011181A-25A109A.xlsx")
+        pl_template = _file_select("Packing List 模板", [".xlsx"], "Packing List-POUT25VE0011181A-25A109A.xlsx", DEFAULT_EXTERNAL_FILES["pl_template"])
     with cols[2]:
-        ci_template = _file_select("PI / CI 模板", [".xlsx"], "CI-POUT25VE0011181A-25A109A.xlsx")
+        ci_template = _file_select("PI / CI 模板", [".xlsx"], "CI-POUT25VE0011181A-25A109A.xlsx", DEFAULT_EXTERNAL_FILES["pi_template"])
     with cols[3]:
-        fabric_db = _file_select("面料数据库", [".json", ".csv", ".xlsx"], "fabric_master_en.csv")
+        fabric_db = _file_select("面料数据库", [".json", ".csv", ".xlsx"], "fabric_master_en.csv", DEFAULT_EXTERNAL_FILES["fabric_db"])
     with cols[4]:
         price_rules = _file_select("价格规则", [".csv", ".xlsx"], "fabric_price_rules.csv")
 
@@ -234,9 +263,254 @@ def _load_data(paths: dict[str, Path | None]) -> tuple[pd.DataFrame, pd.DataFram
         st.error(f"读取面料数据库失败：{exc}")
         st.stop()
 
-    rules_path = paths.get("price_rules")
+    rules_path = paths.get("price_rules") or db_path
     price_rules = _load_rules_cached(str(rules_path)) if rules_path else pd.DataFrame()
     return fabric_df, price_rules, Path(db_path)
+
+
+def _combo_workflow(paths: dict[str, Path | None], fabric_df: pd.DataFrame, price_rules: pd.DataFrame) -> None:
+    _seed_combo_from_templates(paths)
+    _combo_status_header(paths, fabric_df, price_rules)
+    setup_tab, detail_tab, export_tab = st.tabs(["1. 模板与数据库", "2. 明细确认", "3. 审核与生成"])
+
+    with setup_tab:
+        _invoice_pdf_import(paths)
+        order, fabric, _, _ = _invoice_order_inputs(paths, fabric_df, price_rules, paths.get("ci_template"))
+
+    default_price = float(st.session_state.get("invoice_default_price_usd", 10.3) or 10.3)
+    with detail_tab:
+        invoice_input, quantity_unit = _invoice_lines_inputs(default_price, fabric)
+        st.markdown("<div class='section-label'>Packing List 细码明细</div>", unsafe_allow_html=True)
+        st.session_state.packing_default_usd_price = float(st.session_state.get("packing_default_usd_price", default_price) or default_price)
+        rolls_input = _rolls_inputs(order.art_no or order.fabric_code, st.session_state.packing_default_usd_price)
+
+    invoice_lines = _compute_invoice(fabric, invoice_input)
+    order = replace(
+        order,
+        advance_payment_usd=round(float(invoice_lines["amount_usd"].sum()) * 0.3, 2) if not invoice_lines.empty else 0.0,
+    )
+    computed_rolls, packing_summary = _compute_packing(fabric, rolls_input)
+
+    invoice_errors, invoice_warnings = _validate_invoice(fabric, order, invoice_input, quantity_unit)
+    packing_order = replace(order, ci_no=order.pi_no)
+    packing_errors, packing_warnings = _validate_packing(fabric, packing_order, computed_rolls, packing_summary)
+    errors = invoice_errors + packing_errors
+    warnings = invoice_warnings + packing_warnings
+
+    with export_tab:
+        preview_col, audit_col = st.columns([1.35, 0.85], gap="large")
+        with preview_col:
+            _document_preview_cards(order, fabric, invoice_lines, packing_summary)
+        with audit_col:
+            _combo_audit_panel(order, fabric, invoice_lines, packing_summary, errors)
+        _combo_generate(paths, order, fabric, invoice_lines, quantity_unit, computed_rolls, packing_summary, errors, warnings)
+
+
+def _combo_status_header(paths: dict[str, Path | None], fabric_df: pd.DataFrame, price_rules: pd.DataFrame) -> None:
+    pi_template = paths.get("ci_template")
+    pl_template = paths.get("pl_template")
+    fabric_db = paths.get("fabric_db")
+    beijing_now = pd.Timestamp.now(tz=BEIJING_TZ).strftime("%Y-%m-%d %H:%M")
+    top_left, top_right = st.columns([1, 0.12])
+    with top_right:
+        if st.button("换入口", width="stretch"):
+            st.session_state.module = None
+            st.rerun()
+    with top_left:
+        st.markdown(
+            f"""
+            <div class="combo-shell">
+              <div class="brand-mark">P.I/P.L一点腾</div>
+              <div class="brand-sub">外贸单据智能生成工具 · Proforma Invoice & Packing List Generator</div>
+              <div class="brand-time">北京时间 {html.escape(beijing_now)}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    st.markdown(
+        f"""
+        <div class="source-strip">
+          <div><span>PI 模板</span><b>{html.escape(pi_template.name if pi_template else "未选择")}</b></div>
+          <div><span>PL 模板</span><b>{html.escape(pl_template.name if pl_template else "未选择")}</b></div>
+          <div><span>面料库</span><b>{html.escape(fabric_db.name if fabric_db else "未选择")}</b></div>
+          <div><span>面料记录</span><b>{len(fabric_df):,}</b></div>
+          <div><span>价格规则</span><b>{0 if price_rules.empty else len(price_rules):,}</b></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _seed_combo_from_templates(paths: dict[str, Path | None]) -> None:
+    pi_template = paths.get("ci_template")
+    pl_template = paths.get("pl_template")
+    seed_key = f"{pi_template}|{pl_template}"
+    if st.session_state.get("combo_seed_key") == seed_key:
+        return
+    if pi_template and pi_template.exists() and _is_blank_invoice_df(st.session_state.get("invoice_df")):
+        seeded_invoice = _invoice_rows_from_template(pi_template)
+        if not seeded_invoice.empty:
+            st.session_state.invoice_df = seeded_invoice
+    if pl_template and pl_template.exists() and _is_blank_rolls_df(st.session_state.get("rolls_df")):
+        seeded_rolls = _roll_rows_from_packing_template(pl_template)
+        if not seeded_rolls.empty:
+            st.session_state.rolls_df = seeded_rolls
+    st.session_state.combo_seed_key = seed_key
+
+
+def _is_blank_invoice_df(df: pd.DataFrame | None) -> bool:
+    if df is None or df.empty:
+        return True
+    work = df.copy()
+    for column in ["color", "quantity_input", "usd_price_per_kg"]:
+        if column not in work.columns:
+            work[column] = None
+    return work[["color", "quantity_input", "usd_price_per_kg"]].fillna("").astype(str).apply(lambda col: col.str.strip()).eq("").all().all()
+
+
+def _is_blank_rolls_df(df: pd.DataFrame | None) -> bool:
+    if df is None or df.empty:
+        return True
+    work = df.copy()
+    for column in ["color", "lot", "net_weight_kg"]:
+        if column not in work.columns:
+            work[column] = None
+    return work[["color", "lot", "net_weight_kg"]].fillna("").astype(str).apply(lambda col: col.str.strip()).eq("").all().all()
+
+
+def _document_preview_cards(
+    order: OrderInfo,
+    fabric: FabricRecord | None,
+    invoice_lines: pd.DataFrame,
+    packing_summary: pd.DataFrame,
+) -> None:
+    total_amount = float(invoice_lines["amount_usd"].sum()) if not invoice_lines.empty else 0.0
+    remaining = total_amount - float(order.advance_payment_usd or 0)
+    invoice_rows = []
+    for index, row in enumerate(invoice_lines.head(5).itertuples(index=False), start=1):
+        invoice_rows.append(
+            f"<tr><td>{index}</td><td>{html.escape(str(row.color))}</td><td>{float(row.total_net_weight_kg):,.2f}</td><td>{float(row.usd_price_per_kg):,.2f}</td><td>{float(row.amount_usd):,.2f}</td></tr>"
+        )
+    packing_rows = []
+    for index, row in enumerate(packing_summary.head(5).itertuples(index=False), start=1):
+        packing_rows.append(
+            f"<tr><td>{index}</td><td>{html.escape(str(row.color))}</td><td>{int(row.rolls)}</td><td>{float(row.total_net_weight_kg):,.2f}</td><td>{float(row.total_yard):,.2f}</td></tr>"
+        )
+    pi_rows_html = "".join(invoice_rows) or "<tr><td colspan='5'>等待录入 P.I 明细</td></tr>"
+    pl_rows_html = "".join(packing_rows) or "<tr><td colspan='5'>等待录入 Packing List 细码</td></tr>"
+    st.markdown(
+        f"""
+        <div class="doc-preview-grid">
+          <section class="doc-preview-card">
+            <header><h3>Proforma Invoice (P.I)</h3><span>{html.escape(order.pi_no)}</span></header>
+            <div class="doc-meta">
+              <div><span>Buyer</span><b>{html.escape(order.buyer or "-")}</b></div>
+              <div><span>PO No.</span><b>{html.escape(order.po_no or "-")}</b></div>
+              <div><span>Fabric</span><b>{html.escape((fabric.fabric_code if fabric else order.fabric_code) or "-")}</b></div>
+              <div><span>Date</span><b>{html.escape(order.order_date or "-")}</b></div>
+            </div>
+            <table class="doc-table"><thead><tr><th>No.</th><th>Color</th><th>KG</th><th>USD/KG</th><th>Amount</th></tr></thead><tbody>{pi_rows_html}</tbody></table>
+            <footer><div>Total <b>${total_amount:,.2f}</b></div><div>Deposit 30% <b>${float(order.advance_payment_usd or 0):,.2f}</b></div><div>Balance <b>${remaining:,.2f}</b></div></footer>
+          </section>
+          <section class="doc-preview-card">
+            <header><h3>Packing List (P.L)</h3><span>{html.escape(order.pi_no)}</span></header>
+            <div class="doc-meta">
+              <div><span>Item</span><b>{html.escape(order.art_no or "-")}</b></div>
+              <div><span>Yield</span><b>{_format_quantity_factor(fabric.quantification_m_per_kg if fabric else None)} m/kg</b></div>
+              <div><span>Tube</span><b>{fabric.tube_plus_allowance_kg_per_roll if fabric and fabric.tube_plus_allowance_kg_per_roll is not None else "-"}</b></div>
+              <div><span>Groups</span><b>{len(packing_summary)}</b></div>
+            </div>
+            <table class="doc-table"><thead><tr><th>No.</th><th>Color</th><th>Rolls</th><th>Net KG</th><th>Yard</th></tr></thead><tbody>{pl_rows_html}</tbody></table>
+            <footer><div>Total Rolls <b>{int(packing_summary["rolls"].sum()) if not packing_summary.empty else 0}</b></div><div>Net KG <b>{float(packing_summary["total_net_weight_kg"].sum()) if not packing_summary.empty else 0:,.2f}</b></div><div>Amount <b>${float(packing_summary["amount_usd"].sum()) if not packing_summary.empty else 0:,.2f}</b></div></footer>
+          </section>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _combo_audit_panel(
+    order: OrderInfo,
+    fabric: FabricRecord | None,
+    invoice_lines: pd.DataFrame,
+    packing_summary: pd.DataFrame,
+    errors: list[str],
+) -> None:
+    st.markdown("<div class='section-label'>审核要点</div>", unsafe_allow_html=True)
+    total_amount = float(invoice_lines["amount_usd"].sum()) if not invoice_lines.empty else 0.0
+    remaining = total_amount - float(order.advance_payment_usd or 0)
+    total_packing_kg = float(packing_summary["total_net_weight_kg"].sum()) if not packing_summary.empty else 0.0
+    invoice_kg = float(invoice_lines["total_net_weight_kg"].sum()) if not invoice_lines.empty else 0.0
+    kg_gap = abs(invoice_kg - total_packing_kg)
+    status = "待修正" if errors or kg_gap > 0.05 else "可生成"
+    st.markdown(
+        f"""
+        <div class="audit-grid audit-stack">
+          <div><span>Terms of payment</span><b>30% deposit / 70% before shipment</b></div>
+          <div><span>Total amount</span><b>${total_amount:,.2f}</b></div>
+          <div><span>Remaining amount</span><b>${remaining:,.2f}</b></div>
+          <div><span>Deposit 30%</span><b>${float(order.advance_payment_usd or 0):,.2f}</b></div>
+          <div><span>Delivery Time</span><b>模板保留，生成后黄色格复核</b></div>
+          <div><span>Port of Destination</span><b>模板保留，生成后黄色格复核</b></div>
+          <div><span>Buyer's address</span><b>{html.escape(order.buyer_address or "-")}</b></div>
+          <div><span>P.I KG vs P.L KG</span><b>{kg_gap:,.2f} KG</b></div>
+          <div><span>状态</span><b>{status}</b></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if errors:
+        st.error("还有需要修正的项目，请先回到前两个标签页处理。")
+
+
+def _combo_generate(
+    paths: dict[str, Path | None],
+    order: OrderInfo,
+    fabric: FabricRecord | None,
+    invoice_lines: pd.DataFrame,
+    quantity_unit: str,
+    computed_rolls: pd.DataFrame,
+    packing_summary: pd.DataFrame,
+    errors: list[str],
+    warnings: list[str],
+) -> None:
+    st.markdown("<div class='section-label'>一键生成 P.I + P.L</div>", unsafe_allow_html=True)
+    _checks(errors, warnings, "可以生成 Proforma Invoice 和 Packing List")
+    with st.expander("查看详细计算表", expanded=False):
+        _invoice_preview(invoice_lines, quantity_unit, fabric)
+        _preview(packing_summary, computed_rolls)
+    disabled = (
+        bool(errors)
+        or fabric is None
+        or paths.get("ci_template") is None
+        or paths.get("pl_template") is None
+        or invoice_lines.empty
+        or packing_summary.empty
+    )
+    if st.button("一键生成 P.I + P.L", type="primary", disabled=disabled, width="stretch"):
+        generation_order = _order_with_generation_date(order)
+        pi_result = write_proforma_invoice(paths["ci_template"], generation_order, fabric, invoice_lines, quantity_unit=quantity_unit)
+        pl_result = write_packing_list(paths["pl_template"], generation_order, fabric, computed_rolls, packing_summary)
+        st.success("Proforma Invoice 和 Packing List 已生成")
+        st.write(f"P.I：`{pi_result.path}`")
+        st.write(f"Packing List：`{pl_result.path}`")
+        c1, c2 = st.columns(2)
+        with pi_result.path.open("rb") as f:
+            c1.download_button("下载 P.I", f, file_name=pi_result.path.name, width="stretch")
+        with pl_result.path.open("rb") as f:
+            c2.download_button("下载 Packing List", f, file_name=pl_result.path.name, width="stretch")
+
+
+def _beijing_today() -> date:
+    return pd.Timestamp.now(tz=BEIJING_TZ).date()
+
+
+def _order_with_generation_date(order: OrderInfo) -> OrderInfo:
+    today = _beijing_today()
+    doc_no = suggest_doc_number(today=today)
+    st.session_state.pi_no = doc_no
+    st.session_state.ci_no = doc_no
+    return replace(order, pi_no=doc_no, ci_no=doc_no, order_date=today.isoformat())
 
 
 def _invoice_pdf_import(paths: dict[str, Path | None]) -> pd.DataFrame:
@@ -423,7 +697,7 @@ def _packing_order_inputs(
         buyer = st.text_input("TO / Buyer", value=_default_buyer(buyer_template, "packing") or "COTTEX LLP", key="packing_buyer")
         row2 = st.columns([1, 0.8])
         pi_no = row2[0].text_input("P/I NO", value=st.session_state.pi_no, key="packing_pi_no")
-        order_date = row2[1].date_input("日期", value=date.today(), key="packing_date").isoformat()
+        order_date = row2[1].date_input("日期", value=_beijing_today(), key="packing_date").isoformat()
         st.session_state.packing_default_usd_price = st.number_input(
             "默认 USD/KG（来自 P.I/C.I）",
             min_value=0.0,
@@ -459,6 +733,7 @@ def _invoice_order_inputs(
 ) -> tuple[OrderInfo, FabricRecord | None, float | None, str]:
     st.markdown("<div class='section-label'>2. 面料预设和客户档案</div>", unsafe_allow_html=True)
     summary = st.session_state.get("ppo_summary") or {}
+    template_defaults = _invoice_template_defaults(buyer_template)
     left, right = st.columns([1.05, 0.95], gap="large")
 
     with left:
@@ -523,7 +798,7 @@ def _invoice_order_inputs(
         _fabric_database_intake(paths, fabric, fabric_key)
 
     with right:
-        default_buyer = summary.get("buyer") or _default_buyer(buyer_template, "invoice")
+        default_buyer = summary.get("buyer") or template_defaults.get("buyer") or _default_buyer(buyer_template, "invoice")
         if not st.session_state.buyer_text and summary.get("buyer_info_raw"):
             st.session_state.buyer_text = summary["buyer_info_raw"]
         st.markdown("<div class='sub-label'>客户档案（Buyer’s information）</div>", unsafe_allow_html=True)
@@ -541,9 +816,9 @@ def _invoice_order_inputs(
 
         parsed_buyer = parse_buyer_information(st.session_state.buyer_text)
         buyer = (summary.get("buyer") or parsed_buyer.get("buyer") or default_buyer or "").strip()
-        buyer_address = (summary.get("buyer_address") or parsed_buyer.get("buyer_address") or "").strip()
-        po_no = (summary.get("ppo_no") or "POUT26VE0011181A").strip()
-        art_no = (summary.get("style_no") or "25A109A").strip()
+        buyer_address = (summary.get("buyer_address") or parsed_buyer.get("buyer_address") or template_defaults.get("buyer_address") or "").strip()
+        po_no = (summary.get("ppo_no") or template_defaults.get("po_no") or "POUT26VE0002814A").strip()
+        art_no = (summary.get("style_no") or template_defaults.get("item") or "6529").strip()
         with st.expander("订单字段人工修正", expanded=False):
             fix = st.columns(3)
             po_no = fix[0].text_input("PO NO", value=po_no)
@@ -569,7 +844,7 @@ def _invoice_order_inputs(
         buyer=buyer,
         pi_no=st.session_state.pi_no,
         ci_no=st.session_state.ci_no,
-        order_date=date.today().isoformat(),
+        order_date=_beijing_today().isoformat(),
         advance_payment_usd=0.0,
         output_dir=BASE_DIR / "outputs",
         buyer_address=buyer_address,
@@ -906,6 +1181,69 @@ def _invoice_rows_from_ppo(ppo_lines: pd.DataFrame, default_price_usd: float) ->
     return pd.DataFrame(rows, columns=INVOICE_COLUMNS) if rows else empty_invoice_dataframe()
 
 
+def _invoice_rows_from_template(template_path: Path) -> pd.DataFrame:
+    try:
+        from openpyxl import load_workbook
+
+        wb_values = load_workbook(template_path, data_only=True)
+        ws_values = wb_values.active
+        wb_formulas = load_workbook(template_path, data_only=False)
+        ws_formulas = wb_formulas.active
+    except Exception:  # noqa: BLE001
+        return pd.DataFrame(columns=INVOICE_COLUMNS)
+    rows = []
+    for row_no in range(17, 21):
+        color = str(ws_values[f"C{row_no}"].value or "").replace("\n", " ").strip()
+        kg = ws_values[f"D{row_no}"].value
+        price = ws_values[f"F{row_no}"].value
+        if not color or kg in (None, "") or price in (None, ""):
+            continue
+        description = str(ws_formulas[f"A{row_no}"].value or "")
+        source_code = _extract_template_piece(description, r"code:\s*([^\n]+)")
+        art_no = _extract_template_piece(description, r"ART NO\.?:\s*([^\n]+)") or color
+        try:
+            rows.append([color, art_no.strip(), None, float(kg), "KG", float(price), source_code.strip(), "P.I template"])
+        except (TypeError, ValueError):
+            continue
+    return pd.DataFrame(rows, columns=INVOICE_COLUMNS)
+
+
+def _roll_rows_from_packing_template(template_path: Path) -> pd.DataFrame:
+    try:
+        from openpyxl import load_workbook
+
+        wb = load_workbook(template_path, data_only=True)
+        ws = wb.active
+    except Exception:  # noqa: BLE001
+        return pd.DataFrame(columns=ROLL_COLUMNS)
+    blocks = [
+        {"color": 1, "lot": 2, "net": 4, "price_row": 6},
+        {"color": 7, "lot": 8, "net": 10, "price_row": 7},
+        {"color": 13, "lot": 14, "net": 16, "price_row": 8},
+        {"color": 19, "lot": 20, "net": 22, "price_row": 9},
+    ]
+    item = str(ws["AB38"].value or "").strip() or ""
+    rows = []
+    for block in blocks:
+        color = str(ws.cell(10, block["color"]).value or ws.cell(block["price_row"], 26).value or "").replace("\n", " ").strip()
+        price = ws.cell(block["price_row"], 28).value
+        for row_no in range(10, 38):
+            lot = str(ws.cell(row_no, block["lot"]).value or "").strip()
+            net = ws.cell(row_no, block["net"]).value
+            if not color or not lot or net in (None, ""):
+                continue
+            try:
+                rows.append([item, color, lot, float(net), float(price or 0)])
+            except (TypeError, ValueError):
+                continue
+    return pd.DataFrame(rows, columns=ROLL_COLUMNS)
+
+
+def _extract_template_piece(value: str, pattern: str) -> str:
+    match = re.search(pattern, value, flags=re.I)
+    return match.group(1).strip() if match else ""
+
+
 def _compute_packing(fabric: FabricRecord | None, rolls_input: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     if not fabric or not fabric.quantification_m_per_kg:
         return pd.DataFrame(), pd.DataFrame()
@@ -973,7 +1311,7 @@ def _invoice_generate(
     _invoice_preview(invoice_lines, quantity_unit, fabric)
     disabled = bool(errors) or fabric is None or paths.get("ci_template") is None
     if st.button("生成 P.I + C.I", type="primary", disabled=disabled, width="stretch"):
-        result = write_invoice_pair(paths["ci_template"], order, fabric, invoice_lines, quantity_unit=quantity_unit)
+        result = write_invoice_pair(paths["ci_template"], _order_with_generation_date(order), fabric, invoice_lines, quantity_unit=quantity_unit)
         st.success("P.I / C.I 已生成")
         st.write(f"P.I：`{result.pi_path}`")
         st.write(f"C.I：`{result.ci_path}`")
@@ -999,7 +1337,7 @@ def _packing_generate(
     _preview(summary, computed_rolls)
     disabled = bool(errors) or fabric is None or paths.get("pl_template") is None
     if st.button("生成 Packing List", type="primary", disabled=disabled, width="stretch"):
-        result = write_packing_list(paths["pl_template"], order, fabric, computed_rolls, summary)
+        result = write_packing_list(paths["pl_template"], _order_with_generation_date(order), fabric, computed_rolls, summary)
         st.success("Packing List 已生成")
         st.write(f"Excel：`{result.path}`")
         st.write(f"日志：`{result.log_path}`")
@@ -1127,11 +1465,16 @@ def _price_rules(fabric_code: str, price_rules: pd.DataFrame, selected_grade: st
             c
             for c in [
                 "quality_grade_en",
+                "quality_grade_cn",
                 "color_codes",
+                "color_rule_cn",
                 "price_adjustment_cn",
                 "bulk_price_rmb_per_kg",
                 "net_price_rmb_per_kg",
+                "net_price_rmb_per_meter",
+                "default_net_price_rmb_per_kg",
                 "remarks_en",
+                "remarks_cn",
             ]
             if c in subset.columns
         ]
@@ -1633,7 +1976,7 @@ def _price_hint(fabric_code: str, grade: str, price_rules: pd.DataFrame) -> str:
 
 
 def _best_fabric_default(fabric_codes: list[str]) -> str:
-    for code in ["6373D", "E2500292"]:
+    for code in ["6529", "6373D", "E2500292"]:
         if code in fabric_codes:
             return code
     return fabric_codes[0] if fabric_codes else ""
@@ -1779,13 +2122,20 @@ def _clipboard_file_paths() -> list[Path]:
     return paths
 
 
-def _file_select(label: str, suffixes: list[str], default_name: str) -> Path | None:
+def _file_select(label: str, suffixes: list[str], default_name: str, external_default: Path | None = None) -> Path | None:
     files = sorted([p for p in BASE_DIR.iterdir() if p.is_file() and any(str(p).lower().endswith(s.lower()) for s in suffixes)])
-    options = [""] + [p.name for p in files]
+    option_paths = {p.name: p for p in files}
+    if external_default and external_default.exists():
+        option_paths[f"推荐：{external_default.name}"] = external_default
+    options = [""] + list(option_paths.keys())
     default_path = BASE_DIR / default_name
-    default_index = options.index(default_path.name) if default_path.exists() and default_path.name in options else 0
+    default_index = 0
+    if external_default and external_default.exists():
+        default_index = options.index(f"推荐：{external_default.name}")
+    elif default_path.exists() and default_path.name in options:
+        default_index = options.index(default_path.name)
     selected = st.selectbox(label, options, index=default_index)
-    return BASE_DIR / selected if selected else None
+    return option_paths.get(selected) if selected else None
 
 
 def _uploaded_or_current(label: str, types: list[str], current: Path | None) -> Path | None:
@@ -1797,6 +2147,29 @@ def _uploaded_or_current(label: str, types: list[str], current: Path | None) -> 
     target = upload_dir / uploaded.name
     target.write_bytes(uploaded.getbuffer())
     return target
+
+
+def _invoice_template_defaults(template: Path | None) -> dict[str, str]:
+    if not template or not template.exists():
+        return {}
+    try:
+        from openpyxl import load_workbook
+
+        wb = load_workbook(template, data_only=True)
+        ws = wb.active
+    except Exception:  # noqa: BLE001
+        return {}
+    buyer = str(ws["A11"].value or "").strip()
+    if buyer.upper().startswith("BUYER:"):
+        buyer = buyer.split(":", 1)[1].strip()
+    line = str(ws["A17"].value or "")
+    description = str(ws["B17"].value or "")
+    return {
+        "buyer": buyer,
+        "buyer_address": str(ws["A12"].value or "").strip(),
+        "po_no": _extract_template_piece(line, r"PO NO\.?:\s*([^\n]+)"),
+        "item": _extract_template_piece(description, r"ITEM:\s*([^\n]+)"),
+    }
 
 
 def _default_buyer(template: Path | None, module: str) -> str:
@@ -1842,7 +2215,7 @@ def _style() -> None:
             --danger-soft: #fee4e2;
         }
         .stApp { background: var(--bg); color: var(--text); }
-        .block-container { max-width: 1180px; padding-top: 1.2rem; padding-bottom: 3rem; }
+        .block-container { max-width: 1580px; padding-top: .7rem; padding-bottom: 2rem; }
         h1, h2, h3 { letter-spacing: 0; }
         label { color: var(--muted) !important; font-size: .78rem !important; font-weight: 650 !important; }
         .hero { padding: 26px 0 18px; }
@@ -1852,13 +2225,38 @@ def _style() -> None:
             min-height: 180px; border: 1px solid var(--line); border-radius: 14px;
             background: var(--surface); padding: 24px; margin-bottom: 12px;
         }
+        .primary-entry { border-color: #91c7bd; background: #f1fbf8; }
         .entry-card h2 { margin: 0 0 12px; font-size: 1.65rem; }
         .entry-card p { color: var(--muted); max-width: 420px; margin: 0 0 34px; }
         .entry-card span { color: var(--accent); font-weight: 750; font-size: .84rem; }
-        .section-label {
-            margin: 26px 0 12px; font-weight: 780; font-size: 1.05rem; color: var(--text);
+        .combo-shell {
+            display: flex; align-items: baseline; gap: 18px; padding: 8px 0 14px;
+            border-bottom: 1px solid var(--line); margin-bottom: 12px;
         }
-        .summary-row, .fabric-line, .tiny-status, .import-box, .doc-box {
+        .brand-mark { font-size: 1.68rem; font-weight: 850; color: #0f1714; white-space: nowrap; }
+        .brand-sub { color: var(--muted); font-size: .92rem; font-weight: 650; flex: 1; }
+        .brand-time { color: #4c5853; font-size: .84rem; font-weight: 720; margin-left: auto; }
+        .source-strip {
+            display: grid; grid-template-columns: 1.4fr 1.4fr 1.4fr .55fr .55fr; gap: 1px;
+            border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--line);
+            margin: 8px 0 18px;
+        }
+        .source-strip > div { background: var(--surface); padding: 10px 12px; min-width: 0; }
+        .source-strip span { display: block; color: var(--muted); font-size: .68rem; font-weight: 780; margin-bottom: 4px; }
+        .source-strip b { display: block; color: var(--text); font-size: .82rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 6px; border-bottom: 1px solid var(--line); margin-bottom: 10px;
+        }
+        .stTabs [data-baseweb="tab"] {
+            height: 42px; padding: 0 18px; border-radius: 8px 8px 0 0; font-weight: 780;
+        }
+        .stTabs [aria-selected="true"] {
+            background: #e7f4f0; color: var(--accent);
+        }
+        .section-label {
+            margin: 18px 0 10px; font-weight: 820; font-size: 1rem; color: var(--text);
+        }
+        .summary-row, .fabric-line, .tiny-status, .import-box, .doc-box, .audit-grid {
             display: grid; gap: 1px; border: 1px solid var(--line); border-radius: 12px;
             overflow: hidden; background: var(--line); margin: 16px 0;
         }
@@ -1867,13 +2265,16 @@ def _style() -> None:
         .tiny-status { grid-template-columns: 1.5fr .5fr .5fr; margin-top: 28px; }
         .import-box { grid-template-columns: 1fr 1fr 1.6fr .6fr .9fr; }
         .doc-box { grid-template-columns: 1fr 1fr 1.2fr; }
-        .summary-row > div, .fabric-line > div, .tiny-status > div, .import-box > div, .doc-box > div {
+        .audit-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        .audit-stack { grid-template-columns: 1fr; margin-top: 0; }
+        .summary-row > div, .fabric-line > div, .tiny-status > div, .import-box > div, .doc-box > div, .audit-grid > div {
             background: var(--surface); padding: 13px 14px; min-width: 0;
         }
-        .summary-row span, .fabric-line span, .tiny-status span, .import-box span, .doc-box span {
+        .audit-grid > div:nth-child(-n+7) { background: #fff8df; }
+        .summary-row span, .fabric-line span, .tiny-status span, .import-box span, .doc-box span, .audit-grid span {
             display: block; color: var(--muted); font-size: .72rem; font-weight: 700; margin-bottom: 5px;
         }
-        .summary-row b, .fabric-line b, .tiny-status b, .import-box b, .doc-box b {
+        .summary-row b, .fabric-line b, .tiny-status b, .import-box b, .doc-box b, .audit-grid b {
             display: block; color: var(--text); font-size: .92rem; font-weight: 760;
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
@@ -1881,13 +2282,42 @@ def _style() -> None:
         .summary-row b.bad { color: var(--danger); }
         .muted-line { color: var(--muted); font-size: .78rem; margin-top: -8px; }
         .sub-label { margin: 0 0 8px; font-weight: 760; color: var(--text); }
+        .doc-preview-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+        .doc-preview-card {
+            background: var(--surface); border: 1px solid var(--line); border-radius: 8px; overflow: hidden;
+            box-shadow: 0 10px 26px rgba(23, 32, 28, .04);
+        }
+        .doc-preview-card header {
+            display: flex; align-items: center; justify-content: space-between; padding: 14px 16px;
+            border-bottom: 1px solid var(--line); background: #fbfcfc;
+        }
+        .doc-preview-card h3 { margin: 0; color: var(--accent); font-size: 1.05rem; }
+        .doc-preview-card header span { color: var(--muted); font-size: .78rem; font-weight: 760; }
+        .doc-meta { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: var(--line); }
+        .doc-meta > div { background: var(--surface); padding: 10px 12px; min-width: 0; }
+        .doc-meta span { display: block; color: var(--muted); font-size: .66rem; font-weight: 760; margin-bottom: 4px; }
+        .doc-meta b { display: block; font-size: .78rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .doc-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: .78rem; }
+        .doc-table th, .doc-table td { border-bottom: 1px solid var(--line); padding: 9px 10px; text-align: left; }
+        .doc-table th { color: var(--muted); font-size: .68rem; font-weight: 800; background: #f7f9f8; }
+        .doc-table td:nth-child(n+3), .doc-table th:nth-child(n+3) { text-align: right; }
+        .doc-preview-card footer {
+            display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--line);
+        }
+        .doc-preview-card footer div { background: #fbfcfc; padding: 10px 12px; color: var(--muted); font-size: .74rem; }
+        .doc-preview-card footer b { display: block; color: var(--accent); font-size: .9rem; margin-top: 3px; }
         .stButton > button, .stDownloadButton > button {
             border-radius: 9px; border: 1px solid var(--line); font-weight: 700; min-height: 2.55rem;
         }
         .stButton > button[kind="primary"] { background: var(--accent); border-color: var(--accent); }
         div[data-baseweb="input"], div[data-baseweb="select"] > div { border-radius: 9px !important; }
+        div[data-testid="stDataFrame"], div[data-testid="stDataEditor"] {
+            border-radius: 8px; overflow: hidden;
+        }
         @media (max-width: 900px) {
-            .summary-row, .fabric-line, .tiny-status, .import-box, .doc-box { grid-template-columns: 1fr; }
+            .summary-row, .fabric-line, .tiny-status, .import-box, .doc-box, .audit-grid, .source-strip, .doc-preview-grid { grid-template-columns: 1fr; }
+            .combo-shell { display: block; }
+            .brand-time { margin-top: 8px; }
             .hero h1, .module-title h1 { font-size: 1.8rem; }
         }
         </style>
