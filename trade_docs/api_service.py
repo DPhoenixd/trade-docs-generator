@@ -90,6 +90,8 @@ def analyze_files(saved_files: list[Path] | None = None) -> dict[str, Any]:
         fabric = _fabric_from_template(fabric_code, template_defaults, pl_defaults)
 
     order_image_rows = _parse_order_images(order_images)
+    order_image_errors = [row for row in order_image_rows if row.get("parse_error")]
+    order_image_rows = [row for row in order_image_rows if not row.get("parse_error")]
     invoice_input = _invoice_rows_from_order_images(order_image_rows, fabric, template_invoice_input) if order_image_rows else template_invoice_input
     invoice_lines = _compute_invoice(fabric, invoice_input)
     computed_rolls, packing_summary = _compute_packing(fabric, roll_input)
@@ -101,6 +103,7 @@ def analyze_files(saved_files: list[Path] | None = None) -> dict[str, Any]:
         "paths": {key: str(value) for key, value in paths.items() if value},
         "order_images": [str(path) for path in order_images],
         "order_image_rows": order_image_rows,
+        "order_image_errors": order_image_errors,
         "invoice_input": _records(invoice_input),
         "roll_input": _records(roll_input),
         "order": asdict(order),
@@ -112,6 +115,7 @@ def analyze_files(saved_files: list[Path] | None = None) -> dict[str, Any]:
         "session_id": session_id,
         "files": _file_status(paths, order_images),
         "order_image_rows": order_image_rows,
+        "order_image_errors": order_image_errors,
         "invoice_input": _records(invoice_input),
         "roll_input": _records(roll_input),
         "order": asdict(order),
@@ -325,7 +329,7 @@ def _parse_order_images(paths: list[Path]) -> list[dict[str, Any]]:
             rows.extend(_parse_order_image(path))
         except Exception as exc:  # noqa: BLE001
             rows.append({"source_file": path.name, "parse_error": str(exc)})
-    return [row for row in rows if not row.get("parse_error")]
+    return rows
 
 
 def _parse_order_image(path: Path) -> list[dict[str, Any]]:

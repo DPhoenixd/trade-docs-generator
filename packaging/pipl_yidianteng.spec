@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 
 ROOT = Path(SPECPATH).parent
@@ -13,7 +13,7 @@ datas = [
     (str(ROOT / "fabric_master_en.csv"), "."),
     (str(ROOT / "fabric_database_en.xlsx"), "."),
     (str(ROOT / "fabric_price_rules.csv"), "."),
-]
+] + collect_data_files("rapidocr_onnxruntime")
 
 hiddenimports = (
     collect_submodules("uvicorn")

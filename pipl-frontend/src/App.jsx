@@ -380,6 +380,7 @@ function App() {
             <StepUpload
               loading={loading}
               draftRows={draftRows}
+              imageErrors={analysis?.order_image_errors || []}
               onPick={() => fileInputRef.current?.click()}
               onAnalyze={() => analyze(selectedFiles, { preserveUser: false })}
               onUpdate={updateRow}
@@ -438,7 +439,7 @@ function App() {
   );
 }
 
-function StepUpload({ loading, draftRows, onPick, onAnalyze, onUpdate, onAdd, onRemove, onNext, disabled }) {
+function StepUpload({ loading, draftRows, imageErrors = [], onPick, onAnalyze, onUpdate, onAdd, onRemove, onNext, disabled }) {
   return (
     <section className="step-card">
       <div className="step-head">
@@ -452,6 +453,12 @@ function StepUpload({ loading, draftRows, onPick, onAnalyze, onUpdate, onAdd, on
           <Button variant="outline" onClick={onAnalyze} disabled={disabled || loading}><RefreshCw data-icon="inline-start" />重新识别</Button>
         </div>
       </div>
+
+      {imageErrors.length ? (
+        <div className="app-alert subtle-alert">
+          图片 OCR 没有成功：{imageErrors.map((item) => `${item.source_file}: ${item.parse_error}`).join("；")}
+        </div>
+      ) : null}
 
       {draftRows.length ? (
         <>
