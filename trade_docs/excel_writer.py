@@ -268,8 +268,8 @@ def _write_invoice(
         _safe_set(ws, offset, 6, round(float(item.usd_price_per_kg), 4))
         _safe_set(ws, offset, 7, f"=E{offset}*F{offset}")
 
-    _set(ws, f"D{layout['total_row']}", float(order.advance_payment_usd or 0))
-    _set(ws, f"C{layout['balance_row']}", f"=SUM(G17:G{layout['data_end']})-D{layout['total_row']}")
+    _set_merged(ws, f"D{layout['total_row']}", float(order.advance_payment_usd or 0))
+    _set_merged(ws, f"C{layout['balance_row']}", f"=SUM(G17:G{layout['data_end']})-D{layout['total_row']}")
     _write_invoice_review_text(ws, order, layout)
     _highlight_invoice_review_cells(ws, use_yard_price=False, layout=layout)
 
@@ -322,9 +322,9 @@ def _write_pi_yard_price_sheet(
         _safe_set(ws, row_no, 7, f"=D{row_no}*F{row_no}")
         _safe_set(ws, row_no, 8, f"=G{row_no}/E{row_no}")
 
-    _set(ws, f"C{layout['total_row']}", f"=SUM(G17:G{layout['data_end']})")
-    _set(ws, f"D{layout['deposit_row']}", float(order.advance_payment_usd or 0))
-    _set(ws, f"C{layout['balance_row']}", f"=C{layout['total_row']}-D{layout['deposit_row']}")
+    _set_merged(ws, f"C{layout['total_row']}", f"=SUM(G17:G{layout['data_end']})")
+    _set_merged(ws, f"D{layout['deposit_row']}", float(order.advance_payment_usd or 0))
+    _set_merged(ws, f"C{layout['balance_row']}", f"=C{layout['total_row']}-D{layout['deposit_row']}")
     _write_invoice_review_text(ws, order, layout)
     _highlight_invoice_review_cells(ws, use_yard_price=True, layout=layout)
 
@@ -592,6 +592,18 @@ def _set(ws, coordinate: str, value) -> None:
     cell = ws[coordinate]
     if isinstance(cell, MergedCell):
         raise ValueError(f"Cannot write to merged child cell {coordinate}")
+    cell.value = value
+
+
+def _set_merged(ws, coordinate: str, value) -> None:
+    cell = ws[coordinate]
+    if isinstance(cell, MergedCell):
+        for merged_range in ws.merged_cells.ranges:
+            if coordinate in merged_range:
+                cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
+                break
+    if isinstance(cell, MergedCell):
+        return
     cell.value = value
 
 

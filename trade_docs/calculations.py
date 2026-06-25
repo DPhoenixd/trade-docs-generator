@@ -255,8 +255,10 @@ def calculate_invoice_lines(invoice_df: pd.DataFrame, quantification_m_per_kg: f
     df["usd_price_per_kg"] = pd.to_numeric(df["usd_price_per_kg"], errors="coerce")
     df = df.dropna(subset=["quantity_input", "usd_price_per_kg"])
     df = df[df["color"] != ""]
-    df["total_meter"] = df.apply(lambda row: _invoice_meter(row, quantification_m_per_kg), axis=1)
-    df["total_net_weight_kg"] = df["total_meter"] / quantification_m_per_kg
+    q = float(quantification_m_per_kg or 0)
+    df["total_net_weight_kg"] = df.apply(lambda row: _invoice_kg(row, q), axis=1)
+    df = df.dropna(subset=["total_net_weight_kg"])
+    df["total_meter"] = df.apply(lambda row: _invoice_meter(row, q), axis=1)
     df["total_yard"] = df["total_meter"] / 0.9144
     df["amount_usd"] = df["total_net_weight_kg"] * df["usd_price_per_kg"]
     return df
@@ -407,11 +409,23 @@ def _to_float(value: object) -> float | None:
         return None
 
 
+def _invoice_kg(row: pd.Series, quantification_m_per_kg: float) -> float | None:
+    quantity = float(row["quantity_input"])
+    unit = str(row.get("input_unit") or "Yard")
+    if unit == "KG":
+        return quantity
+    if quantification_m_per_kg <= 0:
+        return None
+    if unit == "Meter":
+        return quantity / quantification_m_per_kg
+    return quantity * 0.9144 / quantification_m_per_kg
+
+
 def _invoice_meter(row: pd.Series, quantification_m_per_kg: float) -> float:
     quantity = float(row["quantity_input"])
     unit = str(row.get("input_unit") or "Yard")
     if unit == "KG":
-        return quantity * quantification_m_per_kg
+        return quantity * quantification_m_per_kg if quantification_m_per_kg > 0 else 0.0
     if unit == "Meter":
         return quantity
     return quantity * 0.9144

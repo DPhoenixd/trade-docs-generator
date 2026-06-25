@@ -857,10 +857,10 @@ function buildInvoiceInput(rows, fabricRecord, fallback = []) {
       const amount = Number(row.amount_usd || 0);
       const effectiveUnitPrice = unitPrice || (quantity ? amount / quantity : 0);
       let usdPerKg = Number(row.usd_price_per_kg || 0);
-      if (effectiveUnitPrice && q) {
-        if (unit === "Meter") usdPerKg = effectiveUnitPrice * q;
+      if (effectiveUnitPrice) {
+        if (unit === "KG") usdPerKg = effectiveUnitPrice;
+        else if (unit === "Meter" && q) usdPerKg = effectiveUnitPrice * q;
         else if (unit === "Yard") usdPerKg = effectiveUnitPrice * q * 0.9144;
-        else usdPerKg = effectiveUnitPrice;
       }
       const colorName = String(row.color_name || "").trim();
       const colorCode = String(row.company_color_code || "").trim();
@@ -882,12 +882,11 @@ function buildInvoiceInput(rows, fabricRecord, fallback = []) {
 
 function buildPreviewInvoiceRows(invoiceInput, fabricRecord) {
   const q = Number(fabricRecord?.quantification_m_per_kg || 0);
-  if (!q) return [];
   return invoiceInput.map((row) => {
     const quantity = Number(row.quantity_input || 0);
     const unit = normalizeUnit(row.input_unit);
-    const meter = unit === "KG" ? quantity * q : unit === "Meter" ? quantity : quantity * 0.9144;
-    const kg = meter / q;
+    const meter = unit === "KG" ? (q ? quantity * q : 0) : unit === "Meter" ? quantity : quantity * 0.9144;
+    const kg = unit === "KG" ? quantity : q ? meter / q : 0;
     const price = Number(row.usd_price_per_kg || 0);
     const yard = meter / 0.9144;
     const amount = kg * price;

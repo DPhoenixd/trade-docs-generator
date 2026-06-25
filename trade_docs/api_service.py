@@ -948,9 +948,9 @@ def _issue(key: str, title: str, value: str, detail: str, passed: bool, auto: bo
 
 
 def _compute_invoice(fabric: FabricRecord | None, invoice_input: pd.DataFrame) -> pd.DataFrame:
-    if not fabric or not fabric.quantification_m_per_kg:
+    if not fabric:
         return pd.DataFrame()
-    return calculate_invoice_lines(invoice_input, float(fabric.quantification_m_per_kg))
+    return calculate_invoice_lines(invoice_input, float(fabric.quantification_m_per_kg or 0))
 
 
 def _compute_packing(fabric: FabricRecord | None, roll_input: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
