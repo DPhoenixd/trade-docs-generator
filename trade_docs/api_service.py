@@ -353,7 +353,7 @@ def _parse_order_image(path: Path) -> list[dict[str, Any]]:
     vertical = cv2.morphologyEx(threshold, cv2.MORPH_OPEN, vertical_kernel)
     ys = _merge_positions(np.where(horizontal.sum(axis=1) > width * 255 * 0.25)[0])
     xs = _merge_positions(np.where(vertical.sum(axis=0) > height * 255 * 0.25)[0])
-    if len(xs) < 4 or len(ys) < 2:
+    if len(xs) < 2 or len(ys) < 2:
         return _parse_order_image_from_ocr_lines(path)
 
     engine = RapidOCR()
@@ -409,6 +409,7 @@ def _merge_positions(values) -> list[int]:
 
 def _parse_order_table(table: list[list[str]], source_file: str) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
+    default_unit = _inline_quantity_unit(table)
     for raw in table:
         cells = [_clean_cell(cell) for cell in raw]
         joined = " ".join(cells).upper()
@@ -416,7 +417,7 @@ def _parse_order_table(table: list[list[str]], source_file: str) -> list[dict[st
             continue
         if "COLOR CODE" in joined and len(cells) >= 5:
             cells = _strip_header_prefixes(cells)
-        parsed = _parse_order_cells(cells, source_file)
+        parsed = _parse_order_cells(cells, source_file) or _parse_inline_color_quantity_cells(cells, source_file, default_unit)
         if parsed:
             rows.append(parsed)
     if any(row.get("unit") == "Meter" for row in rows):
@@ -427,6 +428,60 @@ def _parse_order_table(table: list[list[str]], source_file: str) -> list[dict[st
                 if row.get("unit_price_usd") is not None:
                     row["price_basis"] = "per_meter"
     return rows
+
+
+def _inline_quantity_unit(table: list[list[str]]) -> str:
+    text = " ".join(" ".join(str(cell or "") for cell in row) for row in table).upper()
+    if re.search(r"\(\s*Y\s*\)|\bYDS?\b|\bYARD", text):
+        return "Yard"
+    if re.search(r"\(\s*M\s*\)|\bMETER|\bMETRE", text):
+        return "Meter"
+    if re.search(r"\bKG\b|\bKGS\b", text):
+        return "KG"
+    return "Yard"
+
+
+def _parse_inline_color_quantity_cells(cells: list[str], source_file: str, default_unit: str = "Yard") -> dict[str, Any] | None:
+    if len(cells) < 2:
+        return None
+    color_cell = cells[0].strip()
+    if not color_cell or re.search(r"COLOR|TOTAL|QTY|AMOUNT|PRICE", color_cell, flags=re.I):
+        return None
+    match = re.match(r"^(?P<name>[A-Z][A-Z0-9 /&.,]*?)\s*[-/#]\s*#?(?P<code>[0-9]+(?:\s*[+]\s*[0-9]+)*)#?$", color_cell, flags=re.I)
+    if not match:
+        return None
+    quantity_cell = _inline_quantity_cell(cells)
+    quantity = _first_float(quantity_cell)
+    if quantity is None:
+        return None
+    unit = _quantity_unit(quantity_cell, cells)
+    if unit == "Meter" and not re.search(r"\d\s*M\b|\(\s*M\s*\)|METER|METRE", " ".join(cells), flags=re.I):
+        unit = default_unit
+    color_name = re.sub(r"\s+", " ", match.group("name")).strip()
+    company_color_code = _format_company_color_code(re.sub(r"\s+", "", match.group("code")))
+    unit_price = _price_from_cells(cells, 0)
+    amount = _amount_from_cells(cells, 0)
+    return {
+        "source_file": source_file,
+        "style": "",
+        "color_name": color_name,
+        "company_color_code": company_color_code,
+        "display_color": _company_color_label(color_name, company_color_code),
+        "quantity": quantity,
+        "quantity_text": f"{quantity_cell} {unit}".strip(),
+        "unit": unit,
+        "unit_price_usd": unit_price,
+        "price_basis": "per_meter" if unit_price is not None and unit == "Meter" else ("per_yard" if unit_price is not None and unit == "Yard" else ""),
+        "amount_usd": amount,
+    }
+
+
+def _inline_quantity_cell(cells: list[str]) -> str:
+    for cell in cells[1:]:
+        text = str(cell or "").strip()
+        if re.search(r"\d", text) and not re.search(r"COLOR|PRICE|AMOUNT|TOTAL", text, flags=re.I):
+            return text
+    return ""
 
 
 def _parse_order_cells(cells: list[str], source_file: str) -> dict[str, Any] | None:
