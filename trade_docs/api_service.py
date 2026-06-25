@@ -408,6 +408,9 @@ def _merge_positions(values) -> list[int]:
 
 
 def _parse_order_table(table: list[list[str]], source_file: str) -> list[dict[str, Any]]:
+    headered_rows = _parse_headered_invoice_table(table, source_file)
+    if headered_rows:
+        return headered_rows
     rows: list[dict[str, Any]] = []
     default_unit = _inline_quantity_unit(table)
     if len(table) == 1 and len(table[0]) >= 3:
@@ -434,6 +437,68 @@ def _parse_order_table(table: list[list[str]], source_file: str) -> list[dict[st
                 if row.get("unit_price_usd") is not None:
                     row["price_basis"] = "per_meter"
     return rows
+
+
+def _parse_headered_invoice_table(table: list[list[str]], source_file: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for header_index, raw_header in enumerate(table):
+        header = [_clean_cell(cell).upper() for cell in raw_header]
+        if not any("COLOR" in cell for cell in header):
+            continue
+        if not any("QUANTITY" in cell or "/KG" in cell or "KG" == cell for cell in header):
+            continue
+        color_idx = _find_header_index(header, ["COLOR"])
+        kg_idx = _find_header_index(header, ["QUANTITY/KG", "KG"])
+        yard_idx = _find_header_index(header, ["QUANTITY/YARD", "YARD", "YDS"])
+        price_idx = _find_header_index(header, ["PRICES/KG", "PRICE/KG", "USD/KG"])
+        item_idx = _find_header_index(header, ["ITEM", "FABRIC"])
+        if color_idx is None:
+            continue
+        for raw in table[header_index + 1 :]:
+            cells = [_clean_cell(cell) for cell in raw]
+            color_cell = cells[color_idx] if color_idx < len(cells) else ""
+            color_parts = _parse_color_with_code(color_cell)
+            if not color_parts:
+                continue
+            quantity_cell = cells[kg_idx] if kg_idx is not None and kg_idx < len(cells) else ""
+            quantity = _first_float(quantity_cell)
+            unit = "KG"
+            if quantity is None and yard_idx is not None and yard_idx < len(cells):
+                quantity_cell = cells[yard_idx]
+                quantity = _first_float(quantity_cell)
+                unit = "Yard"
+            if quantity is None:
+                continue
+            item_cell = cells[item_idx] if item_idx is not None and item_idx < len(cells) else " ".join(cells)
+            unit_price = _first_float(cells[price_idx]) if price_idx is not None and price_idx < len(cells) else None
+            color_name, company_color_code = color_parts
+            rows.append(
+                {
+                    "source_file": source_file,
+                    "style": _extract(item_cell, r"ITEM\s*:?\s*([A-Z0-9-]+)") or _extract(item_cell, r"\b([A-Z0-9]{3,})\b"),
+                    "color_name": color_name,
+                    "company_color_code": company_color_code,
+                    "display_color": _company_color_label(color_name, company_color_code),
+                    "quantity": quantity,
+                    "quantity_text": f"{quantity_cell} {unit}".strip(),
+                    "unit": unit,
+                    "unit_price_usd": unit_price,
+                    "price_basis": "per_kg" if unit_price is not None and unit == "KG" else "",
+                    "amount_usd": None,
+                }
+            )
+        if rows:
+            return rows
+    return rows
+
+
+def _find_header_index(header: list[str], needles: list[str]) -> int | None:
+    for index, cell in enumerate(header):
+        compact = re.sub(r"\s+", "", cell.upper())
+        for needle in needles:
+            if re.sub(r"\s+", "", needle.upper()) in compact:
+                return index
+    return None
 
 
 def _parse_compact_sequence_cells(cells: list[str], source_file: str, default_unit: str) -> list[dict[str, Any]]:
@@ -487,8 +552,22 @@ def _parse_compact_style_color_quantity_cells(cells: list[str], source_file: str
 
 
 def _parse_compact_color_cell(value: str) -> tuple[str, str] | None:
+    return _parse_color_with_code(value, leading_code=True)
+
+
+def _parse_color_with_code(value: str, leading_code: bool = False) -> tuple[str, str] | None:
     text = re.sub(r"\s+", " ", str(value or "")).strip()
-    match = re.match(r"^(?P<code>[0-9O]+(?:\s*[+]\s*[0-9O]+)*)\s*#?\s*(?P<name>.+)$", text, flags=re.I)
+    patterns = []
+    if leading_code:
+        patterns.append(r"^(?P<code>[0-9O]+(?:\s*[+]\s*[0-9O]+)*)\s*#?\s*(?P<name>.+)$")
+    patterns.extend(
+        [
+            r"^(?P<name>.+?)\s*[-/]\s*#?(?P<code>[0-9O]+(?:\s*[+]\s*[0-9O]+)*)#?$",
+            r"^(?P<name>.+?)\s+#?(?P<code>[0-9O]+(?:\s*[+]\s*[0-9O]+)*)#$",
+            r"^(?P<name>[A-Z][A-Z /&.,]*?)(?P<code>[0-9O]+(?:\s*[+]\s*[0-9O]+)*)#$",
+        ]
+    )
+    match = next((re.match(pattern, text, flags=re.I) for pattern in patterns if re.match(pattern, text, flags=re.I)), None)
     if not match:
         return None
     raw_code = re.sub(r"\s+", "", match.group("code").upper().replace("O", "0"))
