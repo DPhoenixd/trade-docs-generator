@@ -410,6 +410,8 @@ def _merge_positions(values) -> list[int]:
 def _parse_order_table(table: list[list[str]], source_file: str) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     default_unit = _inline_quantity_unit(table)
+    if len(table) == 1 and len(table[0]) >= 3:
+        rows.extend(_parse_compact_sequence_cells([_clean_cell(cell) for cell in table[0]], source_file, default_unit))
     for raw in table:
         cells = [_clean_cell(cell) for cell in raw]
         joined = " ".join(cells).upper()
@@ -417,7 +419,11 @@ def _parse_order_table(table: list[list[str]], source_file: str) -> list[dict[st
             continue
         if "COLOR CODE" in joined and len(cells) >= 5:
             cells = _strip_header_prefixes(cells)
-        parsed = _parse_order_cells(cells, source_file) or _parse_inline_color_quantity_cells(cells, source_file, default_unit)
+        parsed = (
+            _parse_order_cells(cells, source_file)
+            or _parse_inline_color_quantity_cells(cells, source_file, default_unit)
+            or _parse_compact_style_color_quantity_cells(cells, source_file, default_unit)
+        )
         if parsed:
             rows.append(parsed)
     if any(row.get("unit") == "Meter" for row in rows):
@@ -428,6 +434,68 @@ def _parse_order_table(table: list[list[str]], source_file: str) -> list[dict[st
                 if row.get("unit_price_usd") is not None:
                     row["price_basis"] = "per_meter"
     return rows
+
+
+def _parse_compact_sequence_cells(cells: list[str], source_file: str, default_unit: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    index = 0
+    while index + 2 < len(cells):
+        parsed = _parse_compact_style_color_quantity_cells(cells[index : index + 3], source_file, default_unit)
+        if parsed:
+            rows.append(parsed)
+            index += 3
+        else:
+            index += 1
+    return rows
+
+
+def _parse_compact_style_color_quantity_cells(cells: list[str], source_file: str, default_unit: str = "Yard") -> dict[str, Any] | None:
+    if len(cells) < 3:
+        return None
+    style = cells[0].strip()
+    color_cell = cells[1].strip()
+    quantity_cell = cells[2].strip()
+    if not style or not color_cell or not re.search(r"\d", quantity_cell):
+        return None
+    if re.search(r"COLOR|TOTAL|QTY|AMOUNT|PRICE", " ".join(cells), flags=re.I):
+        return None
+    color_parts = _parse_compact_color_cell(color_cell)
+    if not color_parts:
+        return None
+    quantity = _first_float(quantity_cell)
+    if quantity is None:
+        return None
+    unit = _quantity_unit(quantity_cell, cells)
+    if unit == "Meter" and not re.search(r"\d\s*M\b|\(\s*M\s*\)|METER|METRE", " ".join(cells), flags=re.I):
+        unit = default_unit
+    color_name, company_color_code = color_parts
+    unit_price = _price_from_cells(cells, 1)
+    amount = _amount_from_cells(cells, 1)
+    return {
+        "source_file": source_file,
+        "style": style,
+        "color_name": color_name,
+        "company_color_code": company_color_code,
+        "display_color": _company_color_label(color_name, company_color_code),
+        "quantity": quantity,
+        "quantity_text": f"{quantity_cell} {unit}".strip(),
+        "unit": unit,
+        "unit_price_usd": unit_price,
+        "price_basis": "per_meter" if unit_price is not None and unit == "Meter" else ("per_yard" if unit_price is not None and unit == "Yard" else ""),
+        "amount_usd": amount,
+    }
+
+
+def _parse_compact_color_cell(value: str) -> tuple[str, str] | None:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    match = re.match(r"^(?P<code>[0-9O]+(?:\s*[+]\s*[0-9O]+)*)\s*#?\s*(?P<name>.+)$", text, flags=re.I)
+    if not match:
+        return None
+    raw_code = re.sub(r"\s+", "", match.group("code").upper().replace("O", "0"))
+    name = match.group("name").strip(" -/#")
+    if not raw_code or not name:
+        return None
+    return name, _format_company_color_code(raw_code)
 
 
 def _inline_quantity_unit(table: list[list[str]]) -> str:
